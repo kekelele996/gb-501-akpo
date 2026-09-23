@@ -98,6 +98,41 @@ func (b ProductionBatch) InspectionSummary() (total, passed, failed, pending, re
 	return
 }
 
+// SegmentCoverage 汇总三段样本的放行覆盖情况。
+//
+// 段位以有效段位为准（存储段位优先，旧样本按抽样位置兼容识别）。每个段位
+// 只要存在一条已合格样本即视为已覆盖；待复测样本会单独统计，不参与覆盖。
+func (b ProductionBatch) SegmentCoverage() (passed []constants.SampleSegment, missing []constants.SampleSegment, retest int) {
+	passBySegment := make(map[constants.SampleSegment]bool)
+	for _, sample := range b.Inspections {
+		segment := sample.EffectiveSegment()
+		if sample.Result == "pass" && segment.Valid() {
+			passBySegment[segment] = true
+		}
+		if sample.RetestStatus == "requested" {
+			retest++
+		}
+	}
+	for _, segment := range constants.AllSegments() {
+		if passBySegment[segment] {
+			passed = append(passed, segment)
+		} else {
+			missing = append(missing, segment)
+		}
+	}
+	return passed, missing, retest
+}
+
+// MissingSegmentLabels 返回尚未完成合格覆盖的段位中文名，供审批面板与错误提示使用。
+func (b ProductionBatch) MissingSegmentLabels() []string {
+	_, missing, _ := b.SegmentCoverage()
+	labels := make([]string, 0, len(missing))
+	for _, segment := range missing {
+		labels = append(labels, segment.ShortLabel())
+	}
+	return labels
+}
+
 func (b ProductionBatch) ReadyForRelease() (bool, string) {
 	if b.Status == constants.BatchStatusDraft {
 		return false, "batch has not started"
@@ -105,15 +140,12 @@ func (b ProductionBatch) ReadyForRelease() (bool, string) {
 	if b.Status == constants.BatchStatusReleased {
 		return false, "batch is already released"
 	}
-	total, _, failed, pending, retest := b.InspectionSummary()
-	if total == 0 {
+	if len(b.Inspections) == 0 {
 		return false, "at least one inspection is required"
 	}
-	if pending > 0 {
-		return false, "pending inspections remain"
-	}
-	if failed > 0 {
-		return false, "failed inspections remain"
+	_, missing, retest := b.SegmentCoverage()
+	if len(missing) > 0 {
+		return false, "not all sampling segments have a passed inspection"
 	}
 	if retest > 0 {
 		return false, "requested retests remain"

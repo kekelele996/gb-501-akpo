@@ -13,8 +13,8 @@ import (
 
 type InspectionFilter struct {
 	dto.PageQuery
-	Result  string
-	BatchID uint
+	Result  string `form:"result"`
+	BatchID uint   `form:"batchId"`
 }
 
 type InspectionRepository interface {

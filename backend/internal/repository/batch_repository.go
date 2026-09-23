@@ -14,8 +14,8 @@ import (
 
 type BatchFilter struct {
 	dto.PageQuery
-	Status string
-	LineID uint
+	Status string `form:"status"`
+	LineID uint   `form:"lineId"`
 }
 
 type BatchRepository interface {

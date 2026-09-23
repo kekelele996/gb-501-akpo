@@ -57,17 +57,31 @@ func (s *releaseService) Decide(ctx context.Context, actor Actor, input dto.Crea
 		if batch.Status == constants.BatchStatusReleased {
 			return util.Conflict("批次已经放行")
 		}
-		incomplete, err := s.inspectionRepo.CountIncomplete(txCtx, batch.ID)
-		if err != nil {
-			return err
-		}
-		failed, err := s.inspectionRepo.CountByResult(txCtx, batch.ID, "fail")
-		if err != nil {
-			return err
-		}
+		// 隔离与返工不受三段覆盖限制，只做批次状态校验；放行必须满足全部检验红线。
+		var incomplete, failed int64
 		if input.Decision == constants.DecisionRelease {
-			if len(batch.Inspections) == 0 {
-				return util.Conflict("批次至少需要一项检验结果")
+			_, missingSegments, requestedRetest := batch.SegmentCoverage()
+			if len(batch.Inspections) == 0 || len(missingSegments) > 0 {
+				labels := make([]string, 0, len(missingSegments))
+				for _, segment := range missingSegments {
+					labels = append(labels, segment.ShortLabel())
+				}
+				if len(batch.Inspections) == 0 {
+					return util.Conflict("批次尚无检验记录，放行要求起始段、中段、末段均有已完成且合格的样本")
+				}
+				return util.Conflict(fmt.Sprintf("放行要求起始段、中段、末段均有已完成且合格的样本，缺少：%s", strings.Join(labels, "、")))
+			}
+			if requestedRetest > 0 {
+				return util.Conflict("仍有待复测的检验，不能放行")
+			}
+			var countErr error
+			incomplete, countErr = s.inspectionRepo.CountIncomplete(txCtx, batch.ID)
+			if countErr != nil {
+				return countErr
+			}
+			failed, countErr = s.inspectionRepo.CountByResult(txCtx, batch.ID, "fail")
+			if countErr != nil {
+				return countErr
 			}
 			if incomplete > 0 {
 				return util.Conflict("仍有待完成或待复测的检验")
@@ -89,10 +103,15 @@ func (s *releaseService) Decide(ctx context.Context, actor Actor, input dto.Crea
 			batch.Status = constants.BatchStatusRework
 			batch.HoldReason = strings.TrimSpace(input.Reason)
 		}
+		_, missingSegments, requestedRetest := batch.SegmentCoverage()
+		coverage := fmt.Sprintf("三段合格覆盖 %d/3", len(constants.AllSegments())-len(missingSegments))
+		if len(missingSegments) > 0 {
+			coverage += "（缺：" + strings.Join(batch.MissingSegmentLabels(), "、") + "）"
+		}
 		decision = &model.ReleaseDecision{
 			ProductionBatchID: batch.ID, Decision: input.Decision, ApproverID: actor.ID,
 			ApproverName: actor.Name, Reason: strings.TrimSpace(input.Reason), EffectiveAt: time.Now(),
-			InspectionSummary: fmt.Sprintf("共 %d 项检验，%d 项不合格，%d 项待处理", len(batch.Inspections), failed, incomplete),
+			InspectionSummary: fmt.Sprintf("共 %d 项检验，%d 项不合格，%d 项待处理，%d 项待复测；%s", len(batch.Inspections), failed, incomplete, requestedRetest, coverage),
 		}
 		decision.Normalize()
 		if err := decision.Validate(); err != nil {

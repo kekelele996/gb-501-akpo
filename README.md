@@ -5,12 +5,19 @@
 ## 主要流程
 
 1. 产线操作员在「产线总览」确认设备可用，在「批次队列」创建批次并开工。
-2. 检验员在「检验工作台」登记抽样位置和检验项目，录入合格/不合格结果；不合格结果自动进入待复测状态。
+2. 检验员在「检验工作台」按批次起始段、中段、末段登记抽样并录入合格/不合格结果；同一批次同一段位最多保留一条待完成或已合格样本，重复段位整次拒绝；不合格结果自动进入待复测状态。
 3. 放行审批员在「放行审批」查看生产和检验依据，选择放行、隔离或返工。
-4. 放行要求至少一项检验、无待检验、无待复测且无不合格结果；隔离和返工会同步更新批次状态。
+4. 放行要求起始段、中段、末段均有已完成且合格的样本且无待复测；缺少段位会在审批面板逐项列出并禁用放行；隔离和返工不受覆盖限制，但理由必填。
 5. 管理员在「审计记录」按操作者、实体或请求 ID 回溯操作。
 
-首次启动会幂等写入 3 条产线、4 个批次和 5 条检验样本，便于直接验证完整流程；已有业务数据时不会覆盖。
+首次启动会幂等写入 3 条产线、4 个批次和 6 条检验样本（含三段齐全可放行、缺段待检、末段待复测三种场景），便于直接验证完整流程；已有业务数据时不会覆盖。
+
+### 抽样段位与兼容策略
+
+- 段位 `SampleSegment` 固定为 `start`（批次起始段）、`middle`（中段）、`end`（末段），登记时三选一；抽样位置留空时自动取段位名称，也可填写具体工位描述。
+- 唯一约束：同一批次同一段位最多保留一条待完成（`pending`）或已合格（`pass`）样本。重复登记在批次行锁事务内整次拒绝（409），数据库另有部分唯一索引 `idx_inspection_active_segment` 兜住并发提交。不合格样本（含待复测）不占名额，允许在同段重新登记。
+- 放行必须三段都有合格样本且无待复测；隔离/返工不受限但理由必填。
+- 旧数据兼容：启动迁移会把历史空段位按抽样位置文本（起始/开始/start、中/middle、末/尾/end）回填一次；读接口对仍无法回填的样本实时按抽样位置识别，前端使用同一套识别规则，保证刷新和并发提交后段位与覆盖进度一致。
 
 ## 技术结构
 
@@ -157,6 +164,16 @@ curl -s http://localhost:19501/api/lines \
 - 前端 API：`frontend/src/api/index.ts`
 - 前端公共面板：`frontend/src/components/common/DecisionPanel.tsx`
 - 前端使用页面：`ReleasePage.tsx`、`BatchDetailPage.tsx`
+
+`SampleSegment` 的值固定为 `start`、`middle`、`end`：
+
+- 后端定义：`backend/internal/constants/sample_segment.go`
+- 后端持久化/兼容识别/迁移：`backend/internal/model/inspection_sample.go`、`backend/internal/util/database.go`
+- 后端规则：`backend/internal/model/production_batch.go`、`backend/internal/service/inspection_service.go`、`backend/internal/service/release_service.go`
+- 前端类型：`frontend/src/types/domain.ts`
+- 前端工具（含旧样本识别与覆盖计算）：`frontend/src/utils/segment.ts`
+- 前端公共显示：`frontend/src/components/common/SegmentTag.tsx`、`frontend/src/components/common/DecisionPanel.tsx`
+- 前端使用页面：`InspectionsPage.tsx`、`BatchDetailPage.tsx`、`ReleasePage.tsx`
 
 修改枚举时必须同时更新以上位置、数据库兼容策略和 README，不应只修改某一层。
 

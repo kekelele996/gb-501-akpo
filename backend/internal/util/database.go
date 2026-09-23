@@ -38,14 +38,42 @@ func OpenDatabase(dsn string) (*gorm.DB, error) {
 }
 
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&model.User{},
 		&model.PackagingLine{},
 		&model.ProductionBatch{},
 		&model.InspectionSample{},
 		&model.ReleaseDecision{},
 		&model.AuditLog{},
-	)
+	); err != nil {
+		return err
+	}
+	// 段位字段上线后的兼容策略：
+	// 1) 历史样本没有段位，按抽样位置文本回填；无法识别的行保留空值，
+	//    读取时继续按抽样位置实时兼容识别（见 InspectionSample.AfterFind）。
+	backfillSegment := `
+UPDATE inspection_samples SET segment = CASE
+	 WHEN sampling_position ILIKE '%末%' OR sampling_position ILIKE '%尾%' OR sampling_position ILIKE '%end%' THEN 'end'
+	 WHEN sampling_position ILIKE '%起始%' OR sampling_position ILIKE '%开头%' OR sampling_position ILIKE '%开始%'
+	   OR sampling_position ILIKE '%start%' OR sampling_position ILIKE '%begin%' THEN 'start'
+	 WHEN sampling_position ILIKE '%中%' OR sampling_position ILIKE '%middle%' OR sampling_position ILIKE '%mid%' THEN 'middle'
+	 ELSE segment
+END
+WHERE segment IS NULL OR segment = ''`
+	if err := db.Exec(backfillSegment).Error; err != nil {
+		return fmt.Errorf("backfill sample segments: %w", err)
+	}
+	// 2) 数据库级保证：同一批次同一段位只允许一条待完成或已合格样本；
+	//    不合格（含待复测）样本不占名额，可重新登记。服务端在批次行锁内先做
+	//    友好校验，索引用于兜住极端并发。
+	activeSegmentIndex := `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_inspection_active_segment
+	ON inspection_samples (production_batch_id, segment)
+	WHERE result IN ('pending', 'pass')`
+	if err := db.Exec(activeSegmentIndex).Error; err != nil {
+		return fmt.Errorf("create active segment unique index: %w", err)
+	}
+	return nil
 }
 
 func Ready(ctx context.Context, db *gorm.DB) error {
@@ -153,6 +181,7 @@ func SeedDemoData(ctx context.Context, db *gorm.DB) error {
 			{
 				ProductionBatchID: batches[0].ID,
 				SampleCode:        "S-001-START-SEAL",
+				Segment:           constants.SegmentStart,
 				SamplingPosition:  "批次起始段",
 				InspectionItem:    "热封强度",
 				Result:            "pass",
@@ -165,6 +194,7 @@ func SeedDemoData(ctx context.Context, db *gorm.DB) error {
 			{
 				ProductionBatchID: batches[0].ID,
 				SampleCode:        "S-001-MID-DYE",
+				Segment:           constants.SegmentMiddle,
 				SamplingPosition:  "批次中段",
 				InspectionItem:    "染色渗透",
 				Result:            "pending",
@@ -174,6 +204,7 @@ func SeedDemoData(ctx context.Context, db *gorm.DB) error {
 			{
 				ProductionBatchID: batches[1].ID,
 				SampleCode:        "S-014-START-SEAL",
+				Segment:           constants.SegmentStart,
 				SamplingPosition:  "批次起始段",
 				InspectionItem:    "热封强度",
 				Result:            "pass",
@@ -185,7 +216,21 @@ func SeedDemoData(ctx context.Context, db *gorm.DB) error {
 			},
 			{
 				ProductionBatchID: batches[1].ID,
+				SampleCode:        "S-014-MID-SEAL",
+				Segment:           constants.SegmentMiddle,
+				SamplingPosition:  "批次中段",
+				InspectionItem:    "热封强度",
+				Result:            "pass",
+				MeasuredValue:     "1.78 N/15mm",
+				AcceptanceRange:   ">= 1.50 N/15mm",
+				RetestStatus:      "none",
+				InspectorName:     "系统示例",
+				InspectedAt:       &inspectedAt,
+			},
+			{
+				ProductionBatchID: batches[1].ID,
 				SampleCode:        "S-014-END-VISUAL",
+				Segment:           constants.SegmentEnd,
 				SamplingPosition:  "批次末段",
 				InspectionItem:    "外观完整性",
 				Result:            "pass",
@@ -198,6 +243,7 @@ func SeedDemoData(ctx context.Context, db *gorm.DB) error {
 			{
 				ProductionBatchID: batches[2].ID,
 				SampleCode:        "S-009-END-SEAL",
+				Segment:           constants.SegmentEnd,
 				SamplingPosition:  "批次末段",
 				InspectionItem:    "热封强度",
 				Result:            "fail",
