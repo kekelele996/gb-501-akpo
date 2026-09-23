@@ -1,5 +1,5 @@
 import { EyeOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
-import { Button, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Typography, message } from 'antd'
+import { Button, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -11,6 +11,7 @@ import { usePagination } from '../hooks/usePagination'
 import { useBatchStore } from '../stores/batchStore'
 import type { BatchStatus, PackagingLine, ProductionBatch } from '../types/domain'
 import { formatDateTime, formatNumber } from '../utils/format'
+import { SEGMENT_ORDER, segmentCoverage } from '../utils/segment'
 
 export function BatchesPage() {
   const { data, loading, load } = useBatchStore()
@@ -49,7 +50,7 @@ export function BatchesPage() {
     { title: '产线', render: (_, row) => row.packagingLine ? `${row.packagingLine.code} · ${row.packagingLine.name}` : row.packagingLineId },
     { title: '责任班组', dataIndex: 'responsibleTeam' },
     { title: '进度', render: (_, row) => `${formatNumber(row.producedQuantity)} / ${formatNumber(row.plannedQuantity)}` },
-    { title: '检验', render: (_, row) => `${row.inspections?.filter((item) => item.result !== 'pending').length || 0}/${row.inspections?.length || 0}` },
+    { title: '检验/三段覆盖', render: (_, row) => { const covered = segmentCoverage(row.inspections); const count = SEGMENT_ORDER.filter((segment) => covered[segment]).length; return <Space size={4}>{`${row.inspections?.filter((item) => item.result !== 'pending').length || 0}/${row.inspections?.length || 0}`}<Tag color={count === 3 ? 'success' : 'default'}>{count}/3</Tag></Space> } },
     { title: '创建时间', dataIndex: 'createdAt', render: formatDateTime },
     { title: '操作', fixed: 'right', render: (_, row) => <Space><Button size="small" icon={<EyeOutlined />} onClick={() => navigate(`/batches/${row.id}`)}>详情</Button>{row.status === 'draft' && <Button size="small" icon={<PlayCircleOutlined />} disabled={!can('batch:write')} onClick={() => void transition(row, 'running')}>开工</Button>}{row.status === 'running' && <Button size="small" danger icon={<PauseCircleOutlined />} disabled={!can('batch:write')} onClick={() => void transition(row, 'hold')}>暂停</Button>}{['hold', 'rework'].includes(row.status) && <Button size="small" icon={<PlayCircleOutlined />} disabled={!can('batch:write')} onClick={() => void transition(row, 'running')}>恢复</Button>}</Space> },
   ]

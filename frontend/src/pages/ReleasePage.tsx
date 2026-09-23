@@ -11,6 +11,7 @@ import { useAuth } from '../hooks/useAuth'
 import { useReleaseStore } from '../stores/releaseStore'
 import type { DecisionType, ProductionBatch, ReleaseDecision } from '../types/domain'
 import { formatDateTime } from '../utils/format'
+import { SEGMENT_ORDER, segmentCoverage } from '../utils/segment'
 
 export function ReleasePage() {
   const { can } = useAuth()
@@ -34,7 +35,7 @@ export function ReleasePage() {
     { title: '批次', dataIndex: 'batchNo', render: (value, row) => <Button className="table-link" type="link" onClick={() => setSelected(row)}>{value}</Button> },
     { title: '规格', dataIndex: 'specification' },
     { title: '状态', dataIndex: 'status', render: (value) => <BatchStatusBadge status={value} /> },
-    { title: '检验进度', render: (_, row) => `${row.inspections?.filter((sample) => sample.result !== 'pending').length || 0}/${row.inspections?.length || 0}` },
+    { title: '三段合格覆盖', render: (_, row) => { const covered = segmentCoverage(row.inspections); const count = SEGMENT_ORDER.filter((segment) => covered[segment]).length; return <span className={count === 3 ? 'coverage-complete' : 'coverage-pending'}>{count}/3</span> } },
     { title: '不合格', render: (_, row) => row.inspections?.filter((sample) => sample.result === 'fail').length || 0 },
   ]
   const historyColumns: ColumnsType<ReleaseDecision> = [

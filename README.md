@@ -5,9 +5,9 @@
 ## 主要流程
 
 1. 产线操作员在「产线总览」确认设备可用，在「批次队列」创建批次并开工。
-2. 检验员在「检验工作台」登记抽样位置和检验项目，录入合格/不合格结果；不合格结果自动进入待复测状态。
-3. 放行审批员在「放行审批」查看生产和检验依据，选择放行、隔离或返工。
-4. 放行要求至少一项检验、无待检验、无待复测且无不合格结果；隔离和返工会同步更新批次状态。
+2. 检验员在「检验工作台」按批次起始段、中段、末段登记抽样位置和检验项目，录入合格/不合格结果；同批次同一段位只保留一条待完成或已合格样本，不合格结果自动进入待复测状态并释放该段位槽位。
+3. 放行审批员在「放行审批」查看生产和检验依据以及三段合格覆盖进度，选择放行、隔离或返工。
+4. 放行要求三段都有已完成且合格样本、无待完成且无待复测；缺段会在审批面板列出并禁用放行，隔离和返工不受三段覆盖限制但理由必填。
 5. 管理员在「审计记录」按操作者、实体或请求 ID 回溯操作。
 
 首次启动会幂等写入 3 条产线、4 个批次和 5 条检验样本，便于直接验证完整流程；已有业务数据时不会覆盖。
@@ -157,6 +157,25 @@ curl -s http://localhost:19501/api/lines \
 - 前端 API：`frontend/src/api/index.ts`
 - 前端公共面板：`frontend/src/components/common/DecisionPanel.tsx`
 - 前端使用页面：`ReleasePage.tsx`、`BatchDetailPage.tsx`
+
+`SampleSegment`（检验样本段位）的值固定为 `start`（批次起始段）、`middle`（中段）、`end`（末段）：
+
+- 后端定义：`backend/internal/constants/sample_segment.go`
+- 后端持久化与旧样本位置兼容：`backend/internal/model/inspection_sample.go`（`InferSegment`/`EffectiveSegment`）
+- 后端登记与段位占用规则：`backend/internal/service/inspection_service.go`
+- 后端段位占用计数：`backend/internal/repository/inspection_repository.go`
+- 后端放行三段覆盖规则：`backend/internal/model/production_batch.go`（`SegmentCoverage`/`MissingReleaseSegments`）、`backend/internal/service/release_service.go`
+- 后端迁移回填与部分唯一索引：`backend/internal/util/database.go`（`migrateInspectionSegments`）
+- 前端类型：`frontend/src/types/domain.ts`
+- 前端段位与覆盖度计算：`frontend/src/utils/segment.ts`
+- 前端登记/展示页面：`InspectionsPage.tsx`、`BatchDetailPage.tsx`、`ReleasePage.tsx`、`components/common/DecisionPanel.tsx`、`components/common/StatusBadge.tsx`
+
+段位业务约束：
+
+- 登记样本时段位只能选择批次起始段、中段或末段；同一批次同一段位最多保留一条待完成（`pending`）或已合格（`pass`）样本，重复段位整次登记拒绝；样本不合格（`fail`）后释放该段位槽位，允许补登。
+- 段位字段上线前的旧样本没有段位值，系统按抽样位置文本（起始/开始/start、中/middle、末/终/尾/end 等）兼容识别，并在启动迁移时回填；无法识别的旧行不影响其余流程，但不能计入三段覆盖。
+- 数据库在 `(production_batch_id, segment)` 上建有 `result IN ('pending','pass')` 的部分唯一索引，配合批次行锁共同防止并发重复占用。
+- 放行要求三段均有已完成且合格样本，且无待完成、无待复测；审批面板按生产顺序列出缺失段位并禁用放行。隔离和返工不受三段覆盖限制，但审批理由必填（不少于 5 个字）。
 
 修改枚举时必须同时更新以上位置、数据库兼容策略和 README，不应只修改某一层。
 

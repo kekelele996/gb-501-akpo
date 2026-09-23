@@ -5,12 +5,14 @@ const colors: Record<string, string> = {
   pending: 'default', pass: 'success', fail: 'error',
   none: 'default', requested: 'warning', completed: 'success',
   release: 'success', quarantine: 'error', rework: 'warning',
+  start: 'blue', middle: 'geekblue', end: 'purple',
 }
 
 const labels: Record<string, string> = {
   ready: '待机', running: '运行中', maintenance: '维护中', fault: '故障',
   pending: '待检验', pass: '合格', fail: '不合格', none: '无需复测', requested: '待复测', completed: '复测完成',
   release: '放行', quarantine: '隔离', rework: '返工',
+  start: '批次起始段', middle: '中段', end: '末段',
 }
 
 export function StatusBadge({ value, dot = false }: { value: string; dot?: boolean }) {

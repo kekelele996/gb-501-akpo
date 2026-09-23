@@ -98,6 +98,35 @@ func (b ProductionBatch) InspectionSummary() (total, passed, failed, pending, re
 	return
 }
 
+// SegmentCoverage maps each of the three batch segments to a qualified
+// (completed and passed) sample. Legacy samples are recognized through the
+// segment inferred from their sampling position.
+func (b ProductionBatch) SegmentCoverage() map[constants.SampleSegment]bool {
+	covered := make(map[constants.SampleSegment]bool, len(constants.AllSegments()))
+	for _, segment := range constants.AllSegments() {
+		covered[segment] = false
+	}
+	for _, sample := range b.Inspections {
+		if segment := sample.EffectiveSegment(); segment.Valid() && sample.Result == "pass" {
+			covered[segment] = true
+		}
+	}
+	return covered
+}
+
+// MissingReleaseSegments lists the segments without a completed qualified
+// sample, in production order.
+func (b ProductionBatch) MissingReleaseSegments() []constants.SampleSegment {
+	coverage := b.SegmentCoverage()
+	missing := make([]constants.SampleSegment, 0, len(constants.AllSegments()))
+	for _, segment := range constants.AllSegments() {
+		if !coverage[segment] {
+			missing = append(missing, segment)
+		}
+	}
+	return missing
+}
+
 func (b ProductionBatch) ReadyForRelease() (bool, string) {
 	if b.Status == constants.BatchStatusDraft {
 		return false, "batch has not started"
@@ -105,18 +134,22 @@ func (b ProductionBatch) ReadyForRelease() (bool, string) {
 	if b.Status == constants.BatchStatusReleased {
 		return false, "batch is already released"
 	}
-	total, _, failed, pending, retest := b.InspectionSummary()
+	total, _, _, pending, retest := b.InspectionSummary()
 	if total == 0 {
 		return false, "at least one inspection is required"
 	}
 	if pending > 0 {
 		return false, "pending inspections remain"
 	}
-	if failed > 0 {
-		return false, "failed inspections remain"
-	}
 	if retest > 0 {
 		return false, "requested retests remain"
+	}
+	if missing := b.MissingReleaseSegments(); len(missing) > 0 {
+		labels := make([]string, 0, len(missing))
+		for _, segment := range missing {
+			labels = append(labels, segment.Label())
+		}
+		return false, "missing passed samples for segments: " + strings.Join(labels, "、")
 	}
 	return true, ""
 }

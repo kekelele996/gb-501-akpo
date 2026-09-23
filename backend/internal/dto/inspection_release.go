@@ -3,12 +3,13 @@ package dto
 import "sterile-packaging-release-control/backend/internal/constants"
 
 type CreateInspectionRequest struct {
-	ProductionBatchID uint   `json:"productionBatchId" binding:"required"`
-	SampleCode        string `json:"sampleCode" binding:"required,min=3,max=50"`
-	SamplingPosition  string `json:"samplingPosition" binding:"required,max=120"`
-	InspectionItem    string `json:"inspectionItem" binding:"required,max=120"`
-	AcceptanceRange   string `json:"acceptanceRange" binding:"required,max=100"`
-	Notes             string `json:"notes" binding:"max=1000"`
+	ProductionBatchID uint                    `json:"productionBatchId" binding:"required"`
+	SampleCode        string                  `json:"sampleCode" binding:"required,min=3,max=50"`
+	Segment           constants.SampleSegment `json:"segment" binding:"required"`
+	SamplingPosition  string                  `json:"samplingPosition" binding:"required,max=120"`
+	InspectionItem    string                  `json:"inspectionItem" binding:"required,max=120"`
+	AcceptanceRange   string                  `json:"acceptanceRange" binding:"required,max=100"`
+	Notes             string                  `json:"notes" binding:"max=1000"`
 }
 
 type CompleteInspectionRequest struct {

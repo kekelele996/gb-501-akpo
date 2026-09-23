@@ -26,6 +26,7 @@ type InspectionRepository interface {
 	Save(context.Context, *model.InspectionSample) error
 	CountByResult(context.Context, uint, string) (int64, error)
 	CountIncomplete(context.Context, uint) (int64, error)
+	CountOccupyingSegment(ctx context.Context, batchID uint, segment string, excludeID uint) (int64, error)
 }
 
 type inspectionRepository struct{ db *gorm.DB }
@@ -94,5 +95,18 @@ func (r *inspectionRepository) CountIncomplete(ctx context.Context, batchID uint
 	var count int64
 	err := dbForContext(ctx, r.db).Model(&model.InspectionSample{}).
 		Where("production_batch_id = ? AND (result = ? OR retest_status = ?)", batchID, "pending", "requested").Count(&count).Error
+	return count, err
+}
+
+// CountOccupyingSegment counts samples that keep a segment slot occupied:
+// at most one pending or passed sample is allowed per batch and segment.
+func (r *inspectionRepository) CountOccupyingSegment(ctx context.Context, batchID uint, segment string, excludeID uint) (int64, error) {
+	var count int64
+	query := dbForContext(ctx, r.db).Model(&model.InspectionSample{}).
+		Where("production_batch_id = ? AND segment = ? AND result IN ?", batchID, segment, []string{"pending", "pass"})
+	if excludeID > 0 {
+		query = query.Where("id <> ?", excludeID)
+	}
+	err := query.Count(&count).Error
 	return count, err
 }

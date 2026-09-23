@@ -72,8 +72,12 @@ func (s *releaseService) Decide(ctx context.Context, actor Actor, input dto.Crea
 			if incomplete > 0 {
 				return util.Conflict("仍有待完成或待复测的检验")
 			}
-			if failed > 0 {
-				return util.Conflict("存在不合格检验，不能放行")
+			if missing := batch.MissingReleaseSegments(); len(missing) > 0 {
+				labels := make([]string, 0, len(missing))
+				for _, segment := range missing {
+					labels = append(labels, segment.Label())
+				}
+				return util.Conflict("放行要求批次起始段、中段、末段均有已完成且合格的样本，缺少：" + strings.Join(labels, "、"))
 			}
 		}
 		before := *batch
@@ -89,10 +93,16 @@ func (s *releaseService) Decide(ctx context.Context, actor Actor, input dto.Crea
 			batch.Status = constants.BatchStatusRework
 			batch.HoldReason = strings.TrimSpace(input.Reason)
 		}
+		passedSegments := 0
+		for _, covered := range batch.SegmentCoverage() {
+			if covered {
+				passedSegments++
+			}
+		}
 		decision = &model.ReleaseDecision{
 			ProductionBatchID: batch.ID, Decision: input.Decision, ApproverID: actor.ID,
 			ApproverName: actor.Name, Reason: strings.TrimSpace(input.Reason), EffectiveAt: time.Now(),
-			InspectionSummary: fmt.Sprintf("共 %d 项检验，%d 项不合格，%d 项待处理", len(batch.Inspections), failed, incomplete),
+			InspectionSummary: fmt.Sprintf("共 %d 项检验，%d 项不合格，%d 项待处理，三段合格覆盖 %d/3", len(batch.Inspections), failed, incomplete, passedSegments),
 		}
 		decision.Normalize()
 		if err := decision.Validate(); err != nil {

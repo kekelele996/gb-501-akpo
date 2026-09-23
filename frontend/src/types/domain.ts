@@ -1,5 +1,6 @@
 export type BatchStatus = 'draft' | 'running' | 'hold' | 'rework' | 'released'
 export type DecisionType = 'release' | 'quarantine' | 'rework'
+export type SampleSegment = 'start' | 'middle' | 'end'
 export type Role = 'admin' | 'inspector' | 'approver' | 'operator' | 'viewer'
 
 export interface BaseEntity {
@@ -38,6 +39,7 @@ export interface InspectionSample extends BaseEntity {
   productionBatchId: number
   productionBatch?: ProductionBatch
   sampleCode: string
+  segment?: SampleSegment | ''
   samplingPosition: string
   inspectionItem: string
   result: 'pending' | 'pass' | 'fail'

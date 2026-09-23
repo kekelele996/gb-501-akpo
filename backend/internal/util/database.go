@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -38,14 +39,48 @@ func OpenDatabase(dsn string) (*gorm.DB, error) {
 }
 
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&model.User{},
 		&model.PackagingLine{},
 		&model.ProductionBatch{},
 		&model.InspectionSample{},
 		&model.ReleaseDecision{},
 		&model.AuditLog{},
-	)
+	); err != nil {
+		return err
+	}
+	return migrateInspectionSegments(db)
+}
+
+// migrateInspectionSegments backfills the segment column for samples created
+// before the field existed and installs the partial unique index that keeps
+// one pending/passed sample per batch and segment.
+func migrateInspectionSegments(db *gorm.DB) error {
+	backfill := `
+UPDATE inspection_samples SET segment = 'start'
+ WHERE (segment IS NULL OR segment = '')
+   AND (sampling_position LIKE '%起始%' OR sampling_position LIKE '%开始%'
+        OR sampling_position ILIKE '%start%' OR sampling_position ILIKE '%begin%');
+UPDATE inspection_samples SET segment = 'end'
+ WHERE (segment IS NULL OR segment = '')
+   AND (sampling_position LIKE '%末%' OR sampling_position LIKE '%终%' OR sampling_position LIKE '%尾%'
+        OR sampling_position ILIKE '%end%' OR sampling_position ILIKE '%finish%');
+UPDATE inspection_samples SET segment = 'middle'
+ WHERE (segment IS NULL OR segment = '')
+   AND (sampling_position LIKE '%中%' OR sampling_position ILIKE '%middle%' OR sampling_position ILIKE '%mid%');`
+	if err := db.Exec(backfill).Error; err != nil {
+		return fmt.Errorf("backfill inspection segments: %w", err)
+	}
+	indexSQL := `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_inspection_segment_occupancy
+    ON inspection_samples (production_batch_id, segment)
+    WHERE result IN ('pending', 'pass');`
+	if err := db.Exec(indexSQL).Error; err != nil {
+		// Pre-existing duplicate rows may block the index; the service-layer
+		// check still enforces the rule. Surface the degradation loudly.
+		slog.Warn("segment occupancy unique index not created; service-level checks remain active", "error", err)
+	}
+	return nil
 }
 
 func Ready(ctx context.Context, db *gorm.DB) error {
@@ -153,6 +188,7 @@ func SeedDemoData(ctx context.Context, db *gorm.DB) error {
 			{
 				ProductionBatchID: batches[0].ID,
 				SampleCode:        "S-001-START-SEAL",
+				Segment:           constants.SegmentStart,
 				SamplingPosition:  "批次起始段",
 				InspectionItem:    "热封强度",
 				Result:            "pass",
@@ -165,6 +201,7 @@ func SeedDemoData(ctx context.Context, db *gorm.DB) error {
 			{
 				ProductionBatchID: batches[0].ID,
 				SampleCode:        "S-001-MID-DYE",
+				Segment:           constants.SegmentMiddle,
 				SamplingPosition:  "批次中段",
 				InspectionItem:    "染色渗透",
 				Result:            "pending",
@@ -174,6 +211,7 @@ func SeedDemoData(ctx context.Context, db *gorm.DB) error {
 			{
 				ProductionBatchID: batches[1].ID,
 				SampleCode:        "S-014-START-SEAL",
+				Segment:           constants.SegmentStart,
 				SamplingPosition:  "批次起始段",
 				InspectionItem:    "热封强度",
 				Result:            "pass",
@@ -186,6 +224,7 @@ func SeedDemoData(ctx context.Context, db *gorm.DB) error {
 			{
 				ProductionBatchID: batches[1].ID,
 				SampleCode:        "S-014-END-VISUAL",
+				Segment:           constants.SegmentEnd,
 				SamplingPosition:  "批次末段",
 				InspectionItem:    "外观完整性",
 				Result:            "pass",
@@ -196,8 +235,22 @@ func SeedDemoData(ctx context.Context, db *gorm.DB) error {
 				InspectedAt:       &inspectedAt,
 			},
 			{
+				ProductionBatchID: batches[1].ID,
+				SampleCode:        "S-014-MID-SEAL",
+				Segment:           constants.SegmentMiddle,
+				SamplingPosition:  "批次中段",
+				InspectionItem:    "热封强度",
+				Result:            "pass",
+				MeasuredValue:     "1.68 N/15mm",
+				AcceptanceRange:   ">= 1.50 N/15mm",
+				RetestStatus:      "none",
+				InspectorName:     "系统示例",
+				InspectedAt:       &inspectedAt,
+			},
+			{
 				ProductionBatchID: batches[2].ID,
 				SampleCode:        "S-009-END-SEAL",
+				Segment:           constants.SegmentEnd,
 				SamplingPosition:  "批次末段",
 				InspectionItem:    "热封强度",
 				Result:            "fail",
